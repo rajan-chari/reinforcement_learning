@@ -29,6 +29,7 @@ set(PROJECT_SOURCES
   model_mgmt/model_downloader.cc
   model_mgmt/model_mgmt.cc
   model_mgmt/restapi_data_transport.cc
+  model_mgmt/file_model_loader.cc
   ranking_event.cc
   ranking_response.cc
   sampling.cc
@@ -81,6 +82,7 @@ set(PROJECT_PRIVATE_HEADERS
   model_mgmt/empty_data_transport.h
   model_mgmt/model_downloader.h
   model_mgmt/restapi_data_transport.h
+  model_mgmt/file_model_loader.h
   moving_queue.h
   ranking_event.h
   sampling.h
@@ -117,6 +119,12 @@ target_link_libraries(rlclientlib PUBLIC Boost::system vw OpenSSL::SSL OpenSSL::
 if(WIN32)
   target_link_libraries(rlclientlib PUBLIC bcrypt)
 endif()
+
+# On MacOS linking fails unless we explicitly add Boost::thread. It seems like CppRestSDK isn't exporting dependencies properly.
+if (${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
+  target_link_libraries(rlclientlib PUBLIC Boost::thread)
+endif()
+
 
 if(TURN_OFF_DEVIRTUALIZE)
   target_compile_options(rlclientlib PUBLIC -fno-devirtualize)

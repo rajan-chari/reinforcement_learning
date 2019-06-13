@@ -37,11 +37,14 @@ namespace reinforcement_learning {  namespace name {
       const char *const  TIME_PROVIDER_IMPLEMENTATION = "time_provider.implementation";
       const char *const  HTTP_CLIENT_DISABLE_CERT_VALIDATION  = "http.certvalidation.disable";
       const char *const  HTTP_CLIENT_TIMEOUT                  = "http.timeout"; // Timeout is in seconds, default is 30.
+      const char *const  MODEL_FILE_NAME                      = "model_file_loader.file_name";
+      const char *const  MODEL_FILE_MUST_EXIST                = "model_file_loader.file_must_exist";
 }}
 
 namespace reinforcement_learning {  namespace value {
       const char *const AZURE_STORAGE_BLOB = "AZURE_STORAGE_BLOB";
       const char *const NO_MODEL_DATA = "NO_MODEL_DATA";
+      const char *const FILE_MODEL_DATA = "FILE_MODEL_DATA";
       const char *const VW                 = "VW";
       const char *const PASSTHROUGH_PDF_MODEL = "PASSTHROUGH_PDF";
       const char *const OBSERVATION_EH_SENDER = "OBSERVATION_EH_SENDER";
@@ -52,7 +55,6 @@ namespace reinforcement_learning {  namespace value {
       const char *const CONSOLE_TRACE_LOGGER = "CONSOLE_TRACE_LOGGER";
       const char *const NULL_TIME_PROVIDER = "NULL_TIME_PROVIDER";
       const char *const CLOCK_TIME_PROVIDER = "CLOCK_TIME_PROVIDER";
-      const bool MODEL_BACKGROUND_REFRESH = true;
       const bool DEFAULT_MODEL_BACKGROUND_REFRESH = true;
 }}
 
