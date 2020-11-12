@@ -4,6 +4,7 @@
 #include "constants.h"
 #include "model_mgmt/restapi_data_transport.h"
 #include "logger/event_logger.h"
+#include "logger/eventhub_client.h"
 #include "utility/http_helper.h"
 
 namespace reinforcement_learning {
@@ -13,6 +14,7 @@ namespace reinforcement_learning {
   int restapi_data_transport_create(m::i_data_transport** retval, const u::configuration& config, i_trace* trace_logger, api_status* status);
   int observation_sender_create(i_sender** retval, const u::configuration&, error_callback_fn*, i_trace* trace_logger, api_status* status);
   int interaction_sender_create(i_sender** retval, const u::configuration&, error_callback_fn*, i_trace* trace_logger, api_status* status);
+  int decision_sender_create(i_sender** retval, const u::configuration&, error_callback_fn*, i_trace* trace_logger, api_status* status);
 
   void register_azure_factories() {
     data_transport_factory.register_type(value::AZURE_STORAGE_BLOB, restapi_data_transport_create);
@@ -23,16 +25,11 @@ namespace reinforcement_learning {
   int restapi_data_transport_create(m::i_data_transport** retval, const u::configuration& config, i_trace* trace_logger, api_status* status) {
     const auto uri = config.get(name::MODEL_BLOB_URI, nullptr);
     if (uri == nullptr) {
-      api_status::try_update(status, error_code::http_uri_not_provided, error_code::http_uri_not_provided_s);
-      return error_code::http_uri_not_provided;
+      RETURN_ERROR(trace_logger, status, http_uri_not_provided);
     }
-    auto pret = new m::restapi_data_transport(new http_client(uri, config), trace_logger);
-    const auto scode = pret->check(status);
-    if (scode != error_code::success) {
-      delete pret;
-      return scode;
-    }
-    *retval = pret;
+    i_http_client* client;
+    RETURN_IF_FAIL(create_http_client(uri, config, &client, status));
+    *retval = new m::restapi_data_transport(client, trace_logger);
     return error_code::success;
   }
 
@@ -47,9 +44,10 @@ namespace reinforcement_learning {
     const auto eh_host = cfg.get(name::OBSERVATION_EH_HOST, "localhost:8080");
     const auto eh_name = cfg.get(name::OBSERVATION_EH_NAME, "observation");
     const auto eh_url = build_eh_url(eh_host, eh_name);
-
+    i_http_client* client;
+    RETURN_IF_FAIL(create_http_client(eh_url.c_str(), cfg, &client, status));
     *retval = new eventhub_client(
-      new http_client(eh_url.c_str(), cfg),
+      client,
       eh_host,
       cfg.get(name::OBSERVATION_EH_KEY_NAME, ""),
       cfg.get(name::OBSERVATION_EH_KEY, ""),
@@ -65,9 +63,10 @@ namespace reinforcement_learning {
     const auto eh_host = cfg.get(name::INTERACTION_EH_HOST, "localhost:8080");
     const auto eh_name = cfg.get(name::INTERACTION_EH_NAME, "interaction");
     const auto eh_url = build_eh_url(eh_host, eh_name);
-
+    i_http_client* client;
+    RETURN_IF_FAIL(create_http_client(eh_url.c_str(), cfg, &client, status));
     *retval = new eventhub_client(
-      new http_client(eh_url.c_str(), cfg),
+      client,
       cfg.get(name::INTERACTION_EH_HOST, "localhost:8080"),
       cfg.get(name::INTERACTION_EH_KEY_NAME, ""),
       cfg.get(name::INTERACTION_EH_KEY, ""),

@@ -1,44 +1,16 @@
 ﻿using System;
 using System.Collections;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Linq;
 using System.Text;
-using System.Threading.Tasks;
 using Newtonsoft.Json;
-using Newtonsoft.Json.Linq;
 
 namespace Rl.Net.Cli
 {
-    using FeatureSet = System.Collections.Generic.Dictionary<string, int>;
+    using FeatureSet = Dictionary<string, int>;
 
     class PerfTestStepProvider : IDriverStepProvider<float>
     {
-        public class Statistics
-        {
-            public int Messages { get; private set; }
-
-            public int Bytes { get; private set; }
-
-            public Stopwatch Timer { get; } = Stopwatch.StartNew();
-
-            public long ElapsedMs { get; private set; }
-
-            public void Update(PerfTestStep step)
-            {
-                Bytes += Encoding.UTF8.GetByteCount(step.DecisionContext) + Encoding.UTF8.GetByteCount(step.EventId);
-                Messages++;
-                ElapsedMs = Timer.ElapsedMilliseconds;
-            }
-
-            public void Print()
-            {
-                Console.WriteLine($"Data sent: {this.Bytes / 1024} Kb");
-                Console.WriteLine($"Throughput: {this.Bytes / (1024 * this.ElapsedMs / 1000)} Kb / s");
-                Console.WriteLine($"Messages sent: {this.Messages}");
-                Console.WriteLine($"Qps: {this.Messages / (this.ElapsedMs / 1000)}");
-            }
-        }
 
         private IList<string> Contexts { get; set; } = new List<string>();
 
@@ -58,16 +30,35 @@ namespace Rl.Net.Cli
             }
 
             public string DecisionContext { get; set; }
-            
+            public string SlatesContext { get => throw new NotImplementedException(); set => throw new NotImplementedException(); }
+            public string ContinuousActionContext { get => throw new NotImplementedException(); set => throw new NotImplementedException(); }
+
             public float GetOutcome(long actionIndex, IEnumerable<ActionProbability> actionDistribution)
             {
                 return this.Outcome;
+            }
+
+            public float GetOutcome(int[] actionIndexes, float[] probabilities)
+            {
+                return this.Outcome;
+            }
+
+            public float GetSlatesOutcome(int[] actionIndexes, float[] probabilities)
+            {
+                throw new NotImplementedException();
+            }
+
+            public float GetContinuousActionOutcome(float action, float pdfValue)
+            {
+                throw new NotImplementedException();
             }
         }
 
         public string Tag { get; set; } = "Id";
 
         public TimeSpan Duration { get; set; } = TimeSpan.FromSeconds(20);
+
+        public double DataSize { get; set; } = 0;
 
         public Statistics Stats { get; private set; }
 
@@ -86,7 +77,7 @@ namespace Rl.Net.Cli
         public IEnumerator<IStepContext<float>> GetEnumerator()
         {
             this.Stats = new Statistics();
-            while (this.Stats.ElapsedMs < this.Duration.TotalMilliseconds)
+            while (this.Stats.Bytes < this.DataSize || this.Stats.ElapsedMs < this.Duration.TotalMilliseconds)
             {
                 var step = new PerfTestStep
                 {
@@ -96,7 +87,7 @@ namespace Rl.Net.Cli
                 };
 
                 yield return step;
-                this.Stats.Update(step);
+                this.Stats.Update(Encoding.UTF8.GetByteCount(step.DecisionContext) + Encoding.UTF8.GetByteCount(step.EventId));
             }
         }
 

@@ -8,6 +8,14 @@ using System.Threading.Tasks;
 
 namespace Rl.Net.Cli
 {
+    public enum LoopKind : long
+    {
+        CB,
+        CCB,
+        Slates,
+        CA
+    }
+
     public interface IDriverStepProvider<out TOutcome> : IEnumerable<IStepContext<TOutcome>>
     {
     }
@@ -23,8 +31,20 @@ namespace Rl.Net.Cli
         {
             get;
         }
+        string SlatesContext
+        {
+            get;
+        }
+
+        string ContinuousActionContext
+        {
+            get;
+        }
 
         TOutcome GetOutcome(long actionIndex, IEnumerable<ActionProbability> actionDistribution);
+        TOutcome GetOutcome(int[] actionIndexes, float[] probabilities);
+        TOutcome GetSlatesOutcome(int[] actionIndexes, float[] probabilities);
+        TOutcome GetContinuousActionOutcome(float action, float pdfValue);
     }
 
     internal class RunContext
@@ -38,6 +58,16 @@ namespace Rl.Net.Cli
         {
             get;
         } = new ApiStatus();
+
+        public MultiSlotResponse SlatesContainer
+        {
+            get;
+        } = new MultiSlotResponse();
+
+        public ContinuousActionResponse ContinuousActionContainer
+        {
+            get;
+        } = new ContinuousActionResponse();
     }
 
     internal interface IOutcomeReporter<TOutcome>
@@ -48,10 +78,12 @@ namespace Rl.Net.Cli
     public class RLDriver : IOutcomeReporter<float>, IOutcomeReporter<string>
     {
         private LiveModel liveModel;
+        private LoopKind loopKind;
 
-        public RLDriver(LiveModel liveModel)
+        public RLDriver(LiveModel liveModel, LoopKind loopKind = LoopKind.CB)
         {
             this.liveModel = liveModel;
+            this.loopKind = loopKind;
         }
 
         public TimeSpan StepInterval
@@ -78,7 +110,7 @@ namespace Rl.Net.Cli
                 // TODO: Change this to be a command-line arg
                 Thread.Sleep(StepInterval);
 
-                if (++stepsCount % 1000 == 0)
+                if (++stepsCount % 10000 == 0)
                 {
                     Console.Out.WriteLine($"Processed {stepsCount} steps.");
                 }
@@ -100,22 +132,52 @@ namespace Rl.Net.Cli
         private void Step<TOutcome>(RunContext runContext, IOutcomeReporter<TOutcome> outcomeReporter, IStepContext<TOutcome> step)
         {
             string eventId = step.EventId;
+            TOutcome outcome = default(TOutcome);
 
-            if (!liveModel.TryChooseRank(eventId, step.DecisionContext, runContext.ResponseContainer, runContext.ApiStatusContainer))
-            {
-                this.SafeRaiseError(runContext.ApiStatusContainer);
+            if(loopKind == LoopKind.Slates) {
+                if(!liveModel.TryRequestMultiSlotDecision(eventId, step.SlatesContext, runContext.SlatesContainer, runContext.ApiStatusContainer))
+                {
+                    this.SafeRaiseError(runContext.ApiStatusContainer);
+                }
+
+                int[] actions = runContext.SlatesContainer.Select(slot => slot.ActionId).ToArray();
+                float[] probs = runContext.SlatesContainer.Select(slot => slot.Probability).ToArray();
+                outcome = step.GetSlatesOutcome(actions, probs);
+                if (outcome == null)
+                {
+                    return;
+                }
+            } else if (loopKind == LoopKind.CA) {
+                if (!liveModel.TryRequestContinuousAction(eventId, step.ContinuousActionContext, runContext.ContinuousActionContainer, runContext.ApiStatusContainer))
+                {
+                    this.SafeRaiseError(runContext.ApiStatusContainer);
+                }
+                float action = runContext.ContinuousActionContainer.ChosenAction;
+                float pdfValue = runContext.ContinuousActionContainer.ChosenActionPdfValue;
+                outcome = step.GetContinuousActionOutcome(action, pdfValue);
+                if (outcome == null)
+                {
+                    return;
+                }
             }
-
-            long actionIndex = -1;
-            if (!runContext.ResponseContainer.TryGetChosenAction(out actionIndex, runContext.ApiStatusContainer))
+            else
             {
-                this.SafeRaiseError(runContext.ApiStatusContainer);
-            }
+                if (!liveModel.TryChooseRank(eventId, step.DecisionContext, runContext.ResponseContainer, runContext.ApiStatusContainer))
+                {
+                    this.SafeRaiseError(runContext.ApiStatusContainer);
+                }
 
-            TOutcome outcome = step.GetOutcome(actionIndex, runContext.ResponseContainer.AsEnumerable());
-            if (outcome == null)
-            {
-                return;
+                long actionIndex = -1;
+                if (!runContext.ResponseContainer.TryGetChosenAction(out actionIndex, runContext.ApiStatusContainer))
+                {
+                    this.SafeRaiseError(runContext.ApiStatusContainer);
+                }
+
+                outcome = step.GetOutcome(actionIndex, runContext.ResponseContainer.AsEnumerable());
+                if (outcome == null)
+                {
+                    return;
+                }
             }
 
             if (!outcomeReporter.TryQueueOutcomeEvent(runContext, eventId, outcome))

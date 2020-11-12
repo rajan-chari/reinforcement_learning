@@ -4,7 +4,6 @@
 #endif
 
 #include <boost/test/unit_test.hpp>
-#include <fakeit/fakeit.hpp>
 #include "mock_util.h"
 #include "live_model.h"
 #include "config_utility.h"
@@ -13,6 +12,18 @@
 #include "api_status.h"
 #include "err_constants.h"
 #include "console_tracer.h"
+
+#include <mutex>
+
+#ifdef __GNUG__
+
+// Fakeit does not work with GCC's devirtualization
+// which is enabled with -O2 (the default) or higher.
+#pragma GCC optimize("no-devirtualize")
+
+#endif
+
+#include <fakeit/fakeit.hpp>
 
 namespace r = reinforcement_learning;
 namespace u = reinforcement_learning::utility;
@@ -34,9 +45,11 @@ const auto JSON_CONTEXT = R"({"_multi":[{},{}]})";
 
 struct vector_tracer : r::i_trace {
   void log(int log_level, const std::string& msg) override {
+    std::unique_lock<std::mutex> mlock(mutex);
     data.emplace_back(msg);
   }
   std::vector<std::string> data;
+  std::mutex mutex;
 };
 
 vector_tracer* the_tracer = new vector_tracer();
@@ -48,7 +61,7 @@ int vector_trace_create(r::i_trace** retval, const u::configuration&, r::i_trace
 BOOST_AUTO_TEST_CASE(test_trace_logging) {
   auto mock_logger = get_mock_sender(r::error_code::success);
   auto mock_data_transport = get_mock_data_transport();
-  auto mock_model = get_mock_model();
+  auto mock_model = get_mock_model(r::model_management::model_type_t::CB);
 
   auto logger_factory = get_mock_sender_factory(mock_logger.get(), mock_logger.get());
   auto data_transport_factory = get_mock_data_transport_factory(mock_data_transport.get());

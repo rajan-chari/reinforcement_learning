@@ -1,5 +1,6 @@
 #pragma once
-#include "logger/event_logger.h"
+#include "learning_mode.h"
+#include "logger/logger_facade.h"
 #include "model_mgmt.h"
 #include "model_mgmt/data_callback_fn.h"
 #include "model_mgmt/model_downloader.h"
@@ -27,11 +28,22 @@ namespace reinforcement_learning
     int choose_rank(const char* event_id, const char* context, unsigned int flags, ranking_response& response, api_status* status);
     //here the event_id is auto-generated
     int choose_rank(const char* context, unsigned int flags, ranking_response& response, api_status* status);
+    int request_continuous_action(const char* event_id, const char* context, unsigned int flags, continuous_action_response& response, api_status* status);
+    //here the event_id is auto-generated
+    int request_continuous_action(const char* context, unsigned int flags, continuous_action_response& response, api_status* status);
+    int request_decision(const char* context_json, unsigned int flags, decision_response& resp, api_status* status);
+    int request_multi_slot_decision(const char* event_id, const char* context_json, unsigned int flags, multi_slot_response& resp, api_status* status = nullptr);
+    int request_multi_slot_decision(const char* context_json, unsigned int flags, multi_slot_response& resp, api_status* status = nullptr);
 
     int report_action_taken(const char* event_id, api_status* status);
 
     int report_outcome(const char* event_id, const char* outcome_data, api_status* status);
     int report_outcome(const char* event_id, float reward, api_status* status);
+
+    int report_outcome(const char* primary_id, int secondary_id, float outcome, api_status* status= nullptr);
+    int report_outcome(const char* primary_id, const char *secondary_id, float outcome, api_status* status= nullptr);
+    int report_outcome(const char* primary_id, int secondary_id, const char* outcome, api_status* status= nullptr);
+    int report_outcome(const char* primary_id, const char *secondary_id, const char* outcome, api_status* status= nullptr);
 
     int refresh_model(api_status* status);
 
@@ -62,6 +74,8 @@ namespace reinforcement_learning
     int explore_exploit(const char* event_id, const char* context, ranking_response& response, api_status* status) const;
     template<typename D>
     int report_outcome_internal(const char* event_id, D outcome, api_status* status);
+    template<typename D, typename I>
+    int report_outcome_internal(const char* primary_id, I secondary_id, D outcome, api_status* status);
 
   private:
     // Internal implementation state
@@ -71,6 +85,8 @@ namespace reinforcement_learning
     error_callback_fn _error_cb;
     model_management::data_callback_fn _data_cb;
     utility::watchdog _watchdog;
+    learning_mode _learning_mode;
+    const int _protocol_version;
 
     trace_logger_factory_t* _trace_factory;
     data_transport_factory_t* _t_factory;
@@ -80,8 +96,10 @@ namespace reinforcement_learning
 
     std::unique_ptr<model_management::i_data_transport> _transport{nullptr};
     std::unique_ptr<model_management::i_model> _model{nullptr};
-    std::unique_ptr<logger::interaction_logger> _ranking_logger{nullptr};
-    std::unique_ptr<logger::observation_logger> _outcome_logger{nullptr};
+
+    std::unique_ptr<logger::interaction_logger_facade> _interaction_logger{nullptr};
+    std::unique_ptr<logger::observation_logger_facade> _outcome_logger{nullptr};
+
     std::unique_ptr<model_management::model_downloader> _model_download{nullptr};
     std::unique_ptr<i_trace> _trace_logger{nullptr};
 
@@ -96,6 +114,22 @@ namespace reinforcement_learning
 
     // Send the outcome event to the backend
     RETURN_IF_FAIL(_outcome_logger->log(event_id, outcome, status));
+
+    // Check watchdog for any background errors. Do this at the end of function so that the work is still done.
+    if (_watchdog.has_background_error_been_reported()) {
+      RETURN_ERROR_LS(_trace_logger.get(), status, unhandled_background_error_occurred);
+    }
+
+    return error_code::success;
+  }
+
+  template <typename D, typename I>
+  int live_model_impl::report_outcome_internal(const char* primary_id, I secondary_id, D outcome, api_status* status) {
+    // Clear previous errors if any
+    api_status::try_clear(status);
+
+    // Send the outcome event to the backend
+    RETURN_IF_FAIL(_outcome_logger->log(primary_id, secondary_id, outcome, status));
 
     // Check watchdog for any background errors. Do this at the end of function so that the work is still done.
     if (_watchdog.has_background_error_been_reported()) {

@@ -1,4 +1,4 @@
-﻿using Microsoft.VisualStudio.TestTools.UnitTesting;
+using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -7,46 +7,12 @@ using System.Threading.Tasks;
 
 using Rl.Net.Native;
 using System.Runtime.InteropServices;
-using System.IO;
 
 namespace Rl.Net.Cli.Test
 {
-    internal sealed class TempFileDisposable : IDisposable
-    {
-        public TempFileDisposable()
-        {
-            this.Path = System.IO.Path.GetTempFileName();
-        }
-
-        public string Path
-        {
-            get;
-            private set;
-        }
-
-        public void Dispose()
-        {
-            try
-            {
-                if (File.Exists(this.Path))
-                {
-                    File.Delete(this.Path);
-                }
-
-                if (Directory.Exists(this.Path))
-                {
-                    Directory.Delete(this.Path, recursive: true);
-                }
-            }
-            catch
-            {
-                // TestCleanup is best-efforts
-            }
-        }
-    }
 
     [TestClass]
-    public class UnicodeTest
+    public class UnicodeTest : TestBase
     {
         const string PseudoLocLoremIpsum = "£ôřè₥ ïƥƨú₥ δôℓôř ƨïƭ á₥èƭ, çôñƨèçƭèƭúř áδïƥïƨçïñϱ èℓïƭ, ƨèδ δô èïúƨ₥ôδ ƭè₥ƥôř ïñçïδïδúñƭ úƭ ℓáβôřè èƭ δôℓôřè ₥áϱñá áℓï9úá. Ûƭ èñï₥ áδ ₥ïñï₥ Ʋèñïá₥, 9úïƨ ñôƨƭřúδ èжèřçïƭáƭïôñ úℓℓá₥çô ℓáβôřïƨ ñïƨï úƭ áℓï9úïƥ èж èá çô₥₥ôδô çôñƨè9úáƭ. Ðúïƨ áúƭè ïřúřè δôℓôř ïñ řèƥřèλèñδèřïƭ ïñ Ʋôℓúƥƭáƭè Ʋèℓïƭ èƨƨè çïℓℓú₥ δôℓôřè èú ƒúϱïáƭ ñúℓℓá ƥářïáƭúř. Éжçèƥƭèúř ƨïñƭ ôççáèçáƭ çúƥïδáƭáƭ ñôñ ƥřôïδèñƭ, ƨúñƭ ïñ çúℓƥá 9úï ôƒƒïçïá δèƨèřúñƭ ₥ôℓℓïƭ áñï₥ ïδ èƨƭ ℓáβôřú₥. ℓôřè₥ ïƥƨú₥ δôℓôř ƨïƭ á₥èƭ, çôñƨèçƭèƭúř áδïƥïƨçïñϱ èℓïƭ. Núñç èϱèƭ úřñá ℓáôřèèƭ, áççú₥ƨáñ ƒèℓïƨ áƭ, δáƥïβúƨ èℓïƭ. Ìñ úƭ ƭè₥ƥúƨ ₥áúřïƨ";
         const string PseudoLocJson =
@@ -120,19 +86,21 @@ namespace Rl.Net.Cli.Test
             }
         }
 
-        private List<IDisposable> TestCleanup = new List<IDisposable>();
-
-        [TestCleanup]
-        public void CleanupTest()
+        [TestInitialize]
+        public void SetupTest()
         {
-            NativeMethods.ConfigurationGetOverride = null;
-            NativeMethods.ConfigurationSetOverride = null;
-            NativeMethods.LiveModelChooseRankOverride = null;
-            NativeMethods.LiveModelChooseRankWithFlagsOverride = null;
-            NativeMethods.LiveModelReportActionTakenOverride = null;
-            NativeMethods.LiveModelReportOutcomeFOverride = null;
-            NativeMethods.LiveModelReportOutcomeJsonOverride = null;
-            NativeMethods.LoadConfigurationFromJsonOverride = null;
+            void CleanupPInvokeOverrides()
+            {
+                NativeMethods.ConfigurationGetOverride = null;
+                NativeMethods.ConfigurationSetOverride = null;
+                NativeMethods.LiveModelChooseRankOverride = null;
+                NativeMethods.LiveModelChooseRankWithFlagsOverride = null;
+                NativeMethods.LiveModelReportActionTakenOverride = null;
+                NativeMethods.LiveModelReportOutcomeFOverride = null;
+                NativeMethods.LiveModelReportOutcomeJsonOverride = null;
+                NativeMethods.LoadConfigurationFromJsonOverride = null;
+            }
+            this.TestCleanup.Add(CleanupPInvokeOverrides);
         }
 
         [TestMethod]
@@ -368,6 +336,68 @@ namespace Rl.Net.Cli.Test
             Run_LiveModelChooseRankWithFlags_Test(liveModel, PseudoLocEventId, PseudoLocContextJsonWithPdf);
         }
 
+        private void Run_LiveModelRequestDecision_Test(LiveModel liveModel, string contextJson)
+        {
+            NativeMethods.LiveModelRequestDecisionOverride =
+                (IntPtr liveModelPtr, IntPtr contextJsonPtr, IntPtr rankingResponse, IntPtr ApiStatus) =>
+                {
+                    string contextJsonMarshalledBack = NativeMethods.StringMarshallingFunc(contextJsonPtr);
+                    Assert.AreEqual(contextJson, contextJsonMarshalledBack, "Marshalling contextJson does not work properly in LiveModelRequestDecision");
+
+                    return NativeMethods.SuccessStatus;
+                };
+
+            liveModel.RequestDecision(contextJson);
+        }
+
+        private void Run_LiveModelRequestDecisionWithFlags_Test(LiveModel liveModel, string contextJson)
+        {
+            NativeMethods.LiveModelRequestDecisionWithFlagsOverride =
+                (IntPtr liveModelPtr, IntPtr contextJsonPtr, uint flags, IntPtr rankingResponse, IntPtr ApiStatus) =>
+                {
+                    string contextJsonMarshalledBack = NativeMethods.StringMarshallingFunc(contextJsonPtr);
+                    Assert.AreEqual(contextJson, contextJsonMarshalledBack, "Marshalling contextJson does not work properly in LiveModelRequestDecisionWithFlags");
+
+                    return NativeMethods.SuccessStatus;
+                };
+
+            liveModel.RequestDecision(contextJson, ActionFlags.Deferred);
+        }
+
+        [TestMethod]
+        public void Test_LiveModel_RequestDecision()
+        {
+            LiveModel liveModel = this.ConfigureLiveModel();
+
+            Run_LiveModelRequestDecision_Test(liveModel, PseudoLocContextJsonWithPdf);
+            Run_LiveModelRequestDecisionWithFlags_Test(liveModel, PseudoLocContextJsonWithPdf);
+        }
+
+        private void Run_LiveModelRequestContinuousAction_Test(LiveModel liveModel, string contextJson)
+        {
+            NativeMethods.LiveModelRequestContinuousActionOverride =
+                (IntPtr liveModelPtr, IntPtr eventIdPtr, IntPtr contextJsonPtr, IntPtr continuousActionResponse, IntPtr ApiStatus) =>
+                {
+                    string contextJsonMarshalledBack = NativeMethods.StringMarshallingFunc(contextJsonPtr);
+                    Assert.AreEqual(contextJson, contextJsonMarshalledBack, "Marshalling contextJson does not work properly in LiveModelRequestContinuousAction");
+
+                    return NativeMethods.SuccessStatus;
+                };
+
+            liveModel.RequestContinuousAction(PseudoLocEventId, contextJson);
+        }
+
+        [TestMethod]
+        public void Test_LiveModel_RequestContinuousAction()
+        {
+            LiveModel liveModel = this.ConfigureLiveModel();
+
+            Run_LiveModelRequestContinuousAction_Test(liveModel, PseudoLocContextJsonWithPdf);
+        }
+
+        // TODO: Create a real CCB context json and add an E2E test (pending CCB E2E and
+        // clarity around sample mode.)
+
         private void Run_LiveModelReportActionTaken_Test(LiveModel liveModel, string eventId)
         {
             NativeMethods.LiveModelReportActionTakenOverride =
@@ -430,29 +460,31 @@ namespace Rl.Net.Cli.Test
             Run_LiveModelReportOutcomeJson_Test(liveModel, PseudoLocEventId, PseudoLocOutcomeJson);
         }
 
-        private void Run_GetRankingEventId_Test(string eventIdToReturn)
+        private void Run_StringReturnMarshallingTest<TNativeObject>(string valueToReturn, Action<Func<IntPtr, IntPtr>> registerNativeOverride, Func<TNativeObject, string> targetInvocation, string targetInvocationName)
+            where TNativeObject : NativeObject<TNativeObject>, new()
         {
-            RankingResponse rankingResponse = new RankingResponse();
+            TNativeObject targetObject = new TNativeObject();
             GCHandle valueToReturnHandle = default(GCHandle);
 
             try
             {
                 IntPtr valueToReturnPtr = IntPtr.Zero;
-                if (eventIdToReturn != null)
+                if (valueToReturn != null)
                 {
-                    byte[] valueToReturnUtf8Bytes = NativeMethods.StringEncoding.GetBytes(eventIdToReturn);
+                    byte[] valueToReturnUtf8Bytes = NativeMethods.StringEncoding.GetBytes(valueToReturn);
                     valueToReturnHandle = GCHandle.Alloc(valueToReturnUtf8Bytes, GCHandleType.Pinned);
                     valueToReturnPtr = valueToReturnHandle.AddrOfPinnedObject();
                 }
 
-                NativeMethods.GetRankingEventIdOverride =
-                    (IntPtr rankingResponsePtr) =>
-                    {
-                        return valueToReturnPtr;
-                    };
+                IntPtr ReturnTargetValue(IntPtr targetObjectPtr)
+                {
+                    return valueToReturnPtr;
+                }
 
-                string getResult = rankingResponse.EventId;
-                Assert.AreEqual(eventIdToReturn, getResult, "Marshalling result does not work properly in GetRankingEventId");
+                registerNativeOverride(ReturnTargetValue);
+
+                string getResult = targetInvocation(targetObject);
+                Assert.AreEqual(valueToReturn ?? String.Empty, getResult, $"Marshalling result does not work properly in {targetInvocationName}");
             }
             finally
             {
@@ -461,45 +493,29 @@ namespace Rl.Net.Cli.Test
                     valueToReturnHandle.Free();
                 }
 
-                rankingResponse?.Dispose();
-                rankingResponse = null;
+                targetObject?.Dispose();
+                targetObject = null;
             }
         }
 
         private void Run_GetRankingModelId_Test(string modelIdToReturn)
         {
-            RankingResponse rankingResponse = new RankingResponse();
-            GCHandle valueToReturnHandle = default(GCHandle);
-
-            try
+            void RegisterNativeOverride(Func<IntPtr, IntPtr> nativeOverrideCallback)
             {
-                IntPtr valueToReturnPtr = IntPtr.Zero;
-                if (modelIdToReturn != null)
-                {
-                    byte[] valueToReturnUtf8Bytes = NativeMethods.StringEncoding.GetBytes(modelIdToReturn);
-                    valueToReturnHandle = GCHandle.Alloc(valueToReturnUtf8Bytes, GCHandleType.Pinned);
-                    valueToReturnPtr = valueToReturnHandle.AddrOfPinnedObject();
-                }
-
-                NativeMethods.GetRankingModelIdOverride =
-                    (IntPtr rankingResponsePtr) =>
-                    {
-                        return valueToReturnPtr;
-                    };
-
-                string getResult = rankingResponse.ModelId;
-                Assert.AreEqual(modelIdToReturn ?? String.Empty, getResult, "Marshalling result does not work properly in GetRankingModelId");
+                NativeMethods.GetRankingModelIdOverride = nativeOverrideCallback;
             }
-            finally
+
+            Run_StringReturnMarshallingTest<RankingResponse>(modelIdToReturn, RegisterNativeOverride, rankingResponse => rankingResponse.ModelId, nameof(NativeMethods.GetRankingModelId));
+        }
+
+        private void Run_GetRankingEventId_Test(string eventIdToReturn)
+        {
+            void RegisterNativeOverride(Func<IntPtr, IntPtr> nativeOverrideCallback)
             {
-                if (valueToReturnHandle != null && valueToReturnHandle.IsAllocated)
-                {
-                    valueToReturnHandle.Free();
-                }
-
-                rankingResponse?.Dispose();
-                rankingResponse = null;
+                NativeMethods.GetRankingEventIdOverride = nativeOverrideCallback;
             }
+
+            Run_StringReturnMarshallingTest<RankingResponse>(eventIdToReturn, RegisterNativeOverride, rankingResponse => rankingResponse.EventId, nameof(NativeMethods.GetRankingEventId));
         }
 
         [TestMethod]
@@ -510,6 +526,24 @@ namespace Rl.Net.Cli.Test
             Run_GetRankingModelId_Test(String.Join("/", PseudoLocEventId, PseudoLocEventId));
             Run_GetRankingModelId_Test(String.Empty);
             Run_GetRankingModelId_Test(null);
+        }
+
+        private void Run_GetDecisionModelId_Test(string modelIdToReturn)
+        {
+            void RegisterNativeOverride(Func<IntPtr, IntPtr> nativeOverrideCallback)
+            {
+                NativeMethods.GetDecisionModelIdOverride = nativeOverrideCallback;
+            }
+
+            Run_StringReturnMarshallingTest<DecisionResponse>(modelIdToReturn, RegisterNativeOverride, decisionResponse => decisionResponse.ModelId, nameof(NativeMethods.GetDecisionModelId));
+        }
+
+        [TestMethod]
+        public void Test_DecisionResponseStringProperties()
+        {
+            Run_GetDecisionModelId_Test(String.Join("/", PseudoLocEventId, PseudoLocEventId));
+            Run_GetDecisionModelId_Test(String.Empty);
+            Run_GetDecisionModelId_Test(null);
         }
 
         // TODO: Figure out how to project the mock objects from the C++ unit testing code to be

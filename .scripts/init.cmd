@@ -13,8 +13,12 @@ IF NOT DEFINED vstestPath (
 
 IF NOT DEFINED msbuildPath (
     IF NOT EXIST "%VsInstallDir%\MSBuild\15.0\Bin\MSBuild.exe" (
-        ECHO ERROR: MsBuild couldn't be found
-        EXIT /b 1
+        IF EXIST "%VsInstallDir%\MSBuild\Current\Bin\MSBuild.exe" (
+            SET "msBuildPath=%VsInstallDir%\MSBuild\Current\Bin\MSBuild.exe"
+        ) else (
+            ECHO ERROR: MsBuild couldn't be found
+            EXIT /b 1
+        )
     ) ELSE (
         SET "msBuildPath=%VsInstallDir%\MSBuild\15.0\Bin\MSBuild.exe"
     )
@@ -57,4 +61,8 @@ IF NOT DEFINED flatcPath (
 REM Repo-specific paths
 IF NOT DEFINED rlRoot (
     SET rlRoot=%~dp0..
+)
+
+IF NOT DEFINED SkipAzureFactories (
+    SET "SkipAzureFactories=false"
 )

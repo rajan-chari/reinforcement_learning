@@ -5,9 +5,7 @@
 
 #define INIT_CHECK() do {                                       \
   if(!_initialized) {                                           \
-    api_status::try_update(status, error_code::not_initialized, \
-                "Library not initialized. Call init() first."); \
-    return error_code::not_initialized;                         \
+    RETURN_ERROR_ARG(nullptr, status, not_initialized, "Library not initialized. Call init() first."); \
   }                                                             \
 } while(0);                                                     \
 
@@ -79,6 +77,65 @@ namespace reinforcement_learning
     return _pimpl->choose_rank(context_json, flags, response, status);
   }
 
+  int live_model::request_continuous_action(const char * event_id, const char * context_json, unsigned int flags, continuous_action_response& response, api_status* status)
+  {
+    INIT_CHECK();
+    return _pimpl->request_continuous_action(event_id, context_json, flags, response, status);
+  }
+
+  int live_model::request_continuous_action(const char * event_id, const char * context_json, continuous_action_response& response, api_status* status)
+  {
+    INIT_CHECK();
+    return _pimpl->request_continuous_action(event_id, context_json, action_flags::DEFAULT, response, status);
+  }
+
+  int live_model::request_continuous_action(const char * context_json, unsigned int flags, continuous_action_response& response, api_status* status)
+  {
+    INIT_CHECK();
+    return _pimpl->request_continuous_action(context_json, flags, response, status);
+  }
+
+  int live_model::request_continuous_action(const char * context_json, continuous_action_response& response, api_status* status)
+  {
+    INIT_CHECK();
+    return _pimpl->request_continuous_action(context_json, action_flags::DEFAULT, response, status);
+  }
+
+  int live_model::request_decision(const char * context_json, unsigned int flags, decision_response& resp, api_status* status)
+  {
+    INIT_CHECK();
+    return _pimpl->request_decision(context_json, flags, resp, status);
+  }
+
+  int live_model::request_decision(const char * context_json, decision_response& resp, api_status* status)
+  {
+    INIT_CHECK();
+    return request_decision(context_json, action_flags::DEFAULT, resp, status);
+  }
+
+  int live_model::request_multi_slot_decision(const char * event_id, const char * context_json, unsigned int flags, multi_slot_response& resp, api_status* status)
+  {
+    INIT_CHECK();
+    return _pimpl->request_multi_slot_decision(event_id, context_json, flags, resp, status);
+  }
+
+  int live_model::request_multi_slot_decision(const char * event_id, const char * context_json, multi_slot_response& resp, api_status* status)
+  {
+    return request_multi_slot_decision(event_id, context_json, action_flags::DEFAULT, resp, status);
+  }
+
+  int live_model::request_multi_slot_decision(const char * context_json, unsigned int flags, multi_slot_response& resp, api_status* status)
+  {
+    INIT_CHECK();
+    return _pimpl->request_multi_slot_decision(context_json, flags, resp, status);
+  }
+
+  int live_model::request_multi_slot_decision(const char * context_json, multi_slot_response& resp, api_status* status)
+  {
+    return request_multi_slot_decision(context_json, action_flags::DEFAULT, resp, status);
+  }
+
+
   //not implemented yet
   int live_model::report_action_taken(const char* event_id, api_status* status) {
     INIT_CHECK();
@@ -95,6 +152,30 @@ namespace reinforcement_learning
   {
     INIT_CHECK();
     return _pimpl->report_outcome(event_id, outcome, status);
+  }
+
+  int live_model::report_outcome(const char* primary_id, int secondary_id, const char* outcome, api_status* status)
+  {
+    INIT_CHECK();
+    return _pimpl->report_outcome(primary_id, secondary_id, outcome, status);
+  }
+
+  int live_model::report_outcome(const char* primary_id, int secondary_id, float outcome, api_status* status)
+  {
+    INIT_CHECK();
+    return _pimpl->report_outcome(primary_id, secondary_id, outcome, status);
+  }
+
+  int live_model::report_outcome(const char* primary_id, const char* secondary_id, const char* outcome, api_status* status)
+  {
+    INIT_CHECK();
+    return _pimpl->report_outcome(primary_id, secondary_id, outcome, status);
+  }
+
+  int live_model::report_outcome(const char* primary_id, const char* secondary_id, float outcome, api_status* status)
+  {
+    INIT_CHECK();
+    return _pimpl->report_outcome(primary_id, secondary_id, outcome, status);
   }
 
   int live_model::refresh_model(api_status* status)

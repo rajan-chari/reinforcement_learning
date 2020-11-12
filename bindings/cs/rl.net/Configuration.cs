@@ -7,6 +7,8 @@ using System.Text;
 
 namespace Rl.Net {
 
+    using SenderFactory = Func<IReadOnlyConfiguration, ErrorCallback, ISender>;
+
     namespace Native
     {
         // The publics in this class are just a verbose, but jittably-efficient way of enabling overriding a native invocation
@@ -66,11 +68,21 @@ namespace Rl.Net {
         }
     }
 
-    public sealed class Configuration: NativeObject<Configuration>
+    public interface IReadOnlyConfiguration
     {
+        string this[string key] { get; }
+    }
+
+    public sealed class Configuration: NativeObject<Configuration>, IReadOnlyConfiguration
+    {
+        
+
         public Configuration() : base(new New<Configuration>(NativeMethods.CreateConfig), new Delete<Configuration>(NativeMethods.DeleteConfig))
         {
         }
+
+        internal Configuration(IntPtr configuration): base(configuration, ownsHandle: false)
+        {}
 
         unsafe internal static void ConfigurationSet(IntPtr config, string name, string value)
         {
@@ -141,19 +153,38 @@ namespace Rl.Net {
         {
             config = new Configuration();
 
-            int result = LoadConfigurationFromJson(json, config.NativeHandle, apiStatus.ToNativeHandleOrNullptr());
+            int result = LoadConfigurationFromJson(json, config.DangerousGetHandle(), apiStatus.ToNativeHandleOrNullptrDangerous());
             return result == NativeMethods.SuccessStatus;
+        }
+
+        public static Configuration LoadConfigurationFromJson(string json)
+        {
+            using (ApiStatus apiStatus = new ApiStatus())
+            {
+                if (TryLoadConfigurationFromJson(json, out Configuration config, apiStatus))
+                {
+                    return config;
+                }
+
+                throw new RLException(apiStatus);
+            }
         }
 
         public string this[string key]
         {
             get
             {
-                return ConfigurationGet(this.NativeHandle, key, string.Empty);
+                string result = ConfigurationGet(this.DangerousGetHandle(), key, string.Empty);
+
+                GC.KeepAlive(this);
+                return result;
             }
             set
             {
-                ConfigurationSet(this.NativeHandle, key, value ?? string.Empty);
+                ConfigurationSet(this.DangerousGetHandle(), key, value ?? string.Empty);
+                if (key == "")
+
+                GC.KeepAlive(this);
             }
         }
     }

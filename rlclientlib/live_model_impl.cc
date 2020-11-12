@@ -18,6 +18,8 @@
 #include "logger/preamble_sender.h"
 #include "sampling.h"
 
+#include <cstring>
+
 // Some namespace changes for more concise code
 namespace e = exploration;
 using namespace std;
@@ -32,8 +34,9 @@ namespace reinforcement_learning {
   using vw_ptr = std::shared_ptr<safe_vw>;
   using pooled_vw = utility::pooled_object_guard<safe_vw, safe_vw_factory>;
 
-  int check_null_or_empty(const char* arg1, const char* arg2, api_status* status);
-  int check_null_or_empty(const char* arg1, api_status* status);
+  int check_null_or_empty(const char* arg1, const char* arg2, i_trace* trace, api_status* status);
+  int check_null_or_empty(const char* arg1, i_trace* trace, api_status* status);
+  int reset_action_order(ranking_response& response);
 
   void default_error_callback(const api_status& status, void* watchdog_context) {
     auto watchdog = static_cast<utility::watchdog*>(watchdog_context);
@@ -45,6 +48,12 @@ namespace reinforcement_learning {
     RETURN_IF_FAIL(init_model(status));
     RETURN_IF_FAIL(init_model_mgmt(status));
     RETURN_IF_FAIL(init_loggers(status));
+
+    if (_protocol_version == 1 &&
+      _configuration.get(name::INTERACTION_CONTENT_ENCODING, value::CONTENT_ENCODING_IDENTITY) != value::CONTENT_ENCODING_IDENTITY) {
+      RETURN_ERROR_LS(_trace_logger.get(), status, content_encoding_error);
+    }
+
     _initial_epsilon = _configuration.get_float(name::INITIAL_EPSILON, 0.2f);
     const char* app_id = _configuration.get(name::APP_ID, "");
     _seed_shift = uniform_hash(app_id, strlen(app_id), 0);
@@ -58,7 +67,7 @@ namespace reinforcement_learning {
     api_status::try_clear(status);
 
     //check arguments
-    RETURN_IF_FAIL(check_null_or_empty(event_id, context, status));
+    RETURN_IF_FAIL(check_null_or_empty(event_id, context, _trace_logger.get(), status));
     if (!_model_ready) {
       RETURN_IF_FAIL(explore_only(event_id, context, response, status));
       response.set_model_id("N/A");
@@ -67,7 +76,20 @@ namespace reinforcement_learning {
       RETURN_IF_FAIL(explore_exploit(event_id, context, response, status));
     }
     response.set_event_id(event_id);
-    RETURN_IF_FAIL(_ranking_logger->log(event_id, context, flags, response, status));
+
+    if (_learning_mode == LOGGINGONLY)
+    {
+      // Reset the ranked action order before logging
+      RETURN_IF_FAIL(reset_action_order(response));
+    }
+
+    RETURN_IF_FAIL(_interaction_logger->log(context, flags, response, status, _learning_mode));
+
+    if (_learning_mode == APPRENTICE)
+    {
+      // Reset the ranked action order after logging
+      RETURN_IF_FAIL(reset_action_order(response));
+    }
 
     // Check watchdog for any background errors. Do this at the end of function so that the work is still done.
     if (_watchdog.has_background_error_been_reported()) {
@@ -79,8 +101,148 @@ namespace reinforcement_learning {
 
   //here the event_id is auto-generated
   int live_model_impl::choose_rank(const char* context, unsigned int flags, ranking_response& response, api_status* status) {
-    return choose_rank(boost::uuids::to_string(boost::uuids::random_generator()()).c_str(), context, flags, response,
+    const auto uuid = boost::uuids::to_string(boost::uuids::random_generator()());
+    return choose_rank(uuid.c_str(), context, flags, response,
       status);
+  }
+
+  int live_model_impl::request_continuous_action(const char* event_id, const char* context, unsigned int flags, continuous_action_response& response, api_status* status)
+  {
+    response.clear();
+    //clear previous errors if any
+    api_status::try_clear(status);
+
+    RETURN_IF_FAIL(check_null_or_empty(event_id, context, _trace_logger.get(), status));
+    
+    float action;
+    float pdf_value;
+    std::string model_version;
+
+    RETURN_IF_FAIL(_model->choose_continuous_action(context, action, pdf_value, model_version, status));
+    RETURN_IF_FAIL(populate_response(action, pdf_value, std::string(event_id), std::string(model_version), response, _trace_logger.get(), status));
+    RETURN_IF_FAIL(_interaction_logger->log_continuous_action(context, flags, response, status));
+    
+    if (_watchdog.has_background_error_been_reported())
+    {
+      RETURN_ERROR_LS(_trace_logger.get(), status, unhandled_background_error_occurred);
+    }
+
+    return error_code::success;
+  }
+    
+  int live_model_impl::request_continuous_action(const char* context, unsigned int flags, continuous_action_response& response, api_status* status)
+  {
+    const auto uuid = boost::uuids::to_string(boost::uuids::random_generator()());
+    return request_continuous_action(uuid.c_str(), context, flags, response, status);
+  }
+
+  int live_model_impl::request_decision(const char* context_json, unsigned int flags, decision_response& resp, api_status* status)
+  {
+    if (_learning_mode == APPRENTICE || _learning_mode == LOGGINGONLY) {
+      // Apprentice mode and LoggingOnly mode are not supported here at this moment
+      return error_code::not_supported;
+    }
+
+    resp.clear();
+    //clear previous errors if any
+    api_status::try_clear(status);
+
+    //check arguments
+    RETURN_IF_FAIL(check_null_or_empty(context_json, _trace_logger.get(), status));
+
+    utility::ContextInfo context_info;
+    RETURN_IF_FAIL(utility::get_context_info(context_json, context_info, _trace_logger.get(), status));
+
+    // Ensure multi comes before slots, this is a current limitation of the parser.
+    if(context_info.slots.size() < 1 || context_info.actions.size() < 1 || context_info.slots[0].first < context_info.actions[0].first) {
+      RETURN_ERROR_LS(_trace_logger.get(), status, json_parse_error) << "There must be both a _multi field and _slots, and _multi must come first.";
+    }
+
+    std::vector<std::vector<uint32_t>> actions_ids;
+    std::vector<std::vector<float>> actions_pdfs;
+    std::string model_version;
+
+    size_t num_decisions = context_info.slots.size();
+
+    std::vector<std::string> event_ids_str(num_decisions);
+    std::vector<const char*> event_ids(num_decisions, nullptr);
+    std::map<size_t, std::string> found_ids;
+    RETURN_IF_FAIL(utility::get_event_ids(context_json, found_ids, _trace_logger.get(), status));
+
+    for (auto ids : found_ids)
+    {
+      event_ids_str[ids.first] = ids.second;
+      event_ids[ids.first] = event_ids_str[ids.first].c_str();
+    }
+
+    for (int i = 0; i < event_ids.size(); i++)
+    {
+      if (event_ids[i] == nullptr)
+      {
+        event_ids_str[i] = boost::uuids::to_string(boost::uuids::random_generator()()) + std::to_string(_seed_shift);
+        event_ids[i] = event_ids_str[i].c_str();
+      }
+    }
+
+    // This will behave correctly both before a model is loaded and after. Prior to a model being loaded it operates in explore only mode.
+    RETURN_IF_FAIL(_model->request_decision(event_ids, context_json, actions_ids, actions_pdfs, model_version, status));
+    RETURN_IF_FAIL(populate_response(actions_ids, actions_pdfs, event_ids, std::string(model_version), resp, _trace_logger.get(), status));
+    RETURN_IF_FAIL(_interaction_logger->log_decisions(event_ids, context_json, flags, actions_ids, actions_pdfs, model_version, status));
+
+    // Check watchdog for any background errors. Do this at the end of function so that the work is still done.
+    if (_watchdog.has_background_error_been_reported()) {
+      RETURN_ERROR_LS(_trace_logger.get(), status, unhandled_background_error_occurred);
+    }
+
+    return error_code::success;
+  }
+
+  int live_model_impl::request_multi_slot_decision(const char * context_json, unsigned int flags, multi_slot_response& resp, api_status* status)
+  {
+    const auto uuid = boost::uuids::to_string(boost::uuids::random_generator()());
+    return request_multi_slot_decision(uuid.c_str(), context_json, flags, resp, status);
+  }
+
+  int live_model_impl::request_multi_slot_decision(const char * event_id, const char * context_json, unsigned int flags, multi_slot_response& resp, api_status* status)
+  {
+    if (_learning_mode == APPRENTICE || _learning_mode == LOGGINGONLY) {
+      // Apprentice mode and LoggingOnly mode are not supported here at this moment
+      return error_code::not_supported;
+    }
+
+    resp.clear();
+    //clear previous errors if any
+    api_status::try_clear(status);
+
+    //check arguments
+    RETURN_IF_FAIL(check_null_or_empty(event_id, _trace_logger.get(), status));
+    RETURN_IF_FAIL(check_null_or_empty(context_json, _trace_logger.get(), status));
+
+    utility::ContextInfo context_info;
+    RETURN_IF_FAIL(utility::get_context_info(context_json, context_info, _trace_logger.get(), status));
+
+    // Ensure multi comes before slots, this is a current limitation of the parser.
+    if(context_info.slots.size() < 1 || context_info.actions.size() < 1 || context_info.slots[0].first < context_info.actions[0].first) {
+      RETURN_ERROR_LS(_trace_logger.get(), status, json_parse_error) << "There must be both a _multi field and _slots, and _multi must come first.";
+    }
+
+    size_t num_decisions = context_info.slots.size();
+
+    std::vector<std::vector<uint32_t>> actions_ids;
+    std::vector<std::vector<float>> actions_pdfs;
+    std::string model_version;
+
+    // This will behave correctly both before a model is loaded and after. Prior to a model being loaded it operates in explore only mode.
+    RETURN_IF_FAIL(_model->request_multi_slot_decision(event_id, (uint32_t)num_decisions, context_json, actions_ids, actions_pdfs, model_version, status));
+
+    RETURN_IF_FAIL(populate_multi_slot_response(actions_ids, actions_pdfs, std::string(event_id), std::string(model_version), resp, _trace_logger.get(), status));
+    RETURN_IF_FAIL(_interaction_logger->log_decision(event_id, context_json, flags, actions_ids, actions_pdfs, model_version, status));
+
+    // Check watchdog for any background errors. Do this at the end of function so that the work is still done.
+    if (_watchdog.has_background_error_been_reported()) {
+      RETURN_ERROR_LS(_trace_logger.get(), status, unhandled_background_error_occurred);
+    }
+    return error_code::success;
   }
 
   int live_model_impl::report_action_taken(const char* event_id, api_status* status) {
@@ -92,14 +254,40 @@ namespace reinforcement_learning {
 
   int live_model_impl::report_outcome(const char* event_id, const char* outcome, api_status* status) {
     // Check arguments
-    RETURN_IF_FAIL(check_null_or_empty(event_id, outcome, status));
+    RETURN_IF_FAIL(check_null_or_empty(event_id, outcome, _trace_logger.get(), status));
     return report_outcome_internal(event_id, outcome, status);
   }
 
   int live_model_impl::report_outcome(const char* event_id, float outcome, api_status* status) {
     // Check arguments
-    RETURN_IF_FAIL(check_null_or_empty(event_id, status));
+    RETURN_IF_FAIL(check_null_or_empty(event_id, _trace_logger.get(), status));
     return report_outcome_internal(event_id, outcome, status);
+  }
+
+ int live_model_impl::report_outcome(const char* primary_id, int secondary_id, const char* outcome, api_status* status) {
+    // Check arguments
+    RETURN_IF_FAIL(check_null_or_empty(primary_id, outcome, _trace_logger.get(), status));
+    return report_outcome_internal(primary_id, secondary_id, outcome, status);
+  }
+
+  int live_model_impl::report_outcome(const char* primary_id, int secondary_id, float outcome, api_status* status) {
+    // Check arguments
+    RETURN_IF_FAIL(check_null_or_empty(primary_id, _trace_logger.get(), status));
+    return report_outcome_internal(primary_id, secondary_id, outcome, status);
+  }
+
+ int live_model_impl::report_outcome(const char* primary_id, const char* secondary_id, const char* outcome, api_status* status) {
+    // Check arguments
+    RETURN_IF_FAIL(check_null_or_empty(primary_id, outcome, _trace_logger.get(), status));
+    RETURN_IF_FAIL(check_null_or_empty(secondary_id, _trace_logger.get(), status));
+    return report_outcome_internal(primary_id, secondary_id, outcome, status);
+  }
+
+  int live_model_impl::report_outcome(const char* primary_id, const char* secondary_id, float outcome, api_status* status) {
+    // Check arguments
+    RETURN_IF_FAIL(check_null_or_empty(primary_id, _trace_logger.get(), status));
+    RETURN_IF_FAIL(check_null_or_empty(secondary_id, _trace_logger.get(), status));
+    return report_outcome_internal(primary_id, secondary_id, outcome, status);
   }
 
   int live_model_impl::refresh_model(api_status* status) {
@@ -112,7 +300,7 @@ namespace reinforcement_learning {
     model_management::model_data md;
     RETURN_IF_FAIL(_transport->get_data(md, status));
 
-	bool model_ready = false;
+    bool model_ready = false;
     RETURN_IF_FAIL(_model->update(md, model_ready, status));
 
     _model_ready = model_ready;
@@ -131,14 +319,15 @@ namespace reinforcement_learning {
     time_provider_factory_t* time_provider_factory
   )
     : _configuration(config),
-      _error_cb(fn, err_context),
-      _data_cb(_handle_model_update, this),
-      _watchdog(&_error_cb),
-      _trace_factory(trace_factory),
-      _t_factory{t_factory},
-      _m_factory{m_factory},
-      _sender_factory{sender_factory},
-      _time_provider_factory{time_provider_factory}
+    _error_cb(fn, err_context),
+    _data_cb(_handle_model_update, this),
+    _watchdog(&_error_cb),
+    _trace_factory(trace_factory),
+    _t_factory{ t_factory },
+    _m_factory{ m_factory },
+    _sender_factory{ sender_factory },
+    _time_provider_factory{ time_provider_factory },
+    _protocol_version(_configuration.get_int(name::PROTOCOL_VERSION, value::DEFAULT_PROTOCOL_VERSION))
   {
     // If there is no user supplied error callback, supply a default one that does nothing but report unhandled background errors.
     if (fn == nullptr) {
@@ -148,12 +337,14 @@ namespace reinforcement_learning {
     if (_configuration.get_bool(name::MODEL_BACKGROUND_REFRESH, value::DEFAULT_MODEL_BACKGROUND_REFRESH)) {
       _bg_model_proc.reset(new utility::periodic_background_proc<model_management::model_downloader>(config.get_int(name::MODEL_REFRESH_INTERVAL_MS, 60 * 1000), _watchdog, "Model downloader", &_error_cb));
     }
+
+    _learning_mode = learning::to_learning_mode(_configuration.get(name::LEARNING_MODE, value::LEARNING_MODE_ONLINE));
   }
 
   int live_model_impl::init_trace(api_status* status) {
     const auto trace_impl = _configuration.get(name::TRACE_LOG_IMPLEMENTATION, value::NULL_TRACE_LOGGER);
     i_trace* plogger;
-    RETURN_IF_FAIL(_trace_factory->create(&plogger, trace_impl,_configuration, nullptr, status));
+    RETURN_IF_FAIL(_trace_factory->create(&plogger, trace_impl, _configuration, nullptr, status));
     _trace_logger.reset(plogger);
     TRACE_INFO(_trace_logger, "API Tracing initialized");
     _watchdog.set_trace_log(_trace_logger.get());
@@ -170,36 +361,36 @@ namespace reinforcement_learning {
 
   int live_model_impl::init_loggers(api_status* status) {
     // Get the name of raw data (as opposed to message) sender for interactions.
-    const auto ranking_sender_impl = _configuration.get(name::INTERACTION_SENDER_IMPLEMENTATION, value::INTERACTION_EH_SENDER);
+    const auto* const ranking_sender_impl = _configuration.get(name::INTERACTION_SENDER_IMPLEMENTATION, value::get_default_interaction_sender());
     i_sender* ranking_data_sender;
 
     // Use the name to create an instance of raw data sender for interactions
     RETURN_IF_FAIL(_sender_factory->create(&ranking_data_sender, ranking_sender_impl, _configuration, &_error_cb, _trace_logger.get(), status));
     RETURN_IF_FAIL(ranking_data_sender->init(status));
 
-    // Create a message sender that will prepend the message with a preamble and send the raw data using the 
+    // Create a message sender that will prepend the message with a preamble and send the raw data using the
     // factory created raw data sender
     l::i_message_sender* ranking_msg_sender = new l::preamble_message_sender(ranking_data_sender);
     RETURN_IF_FAIL(ranking_msg_sender->init(status));
 
     // Get time provider factory and implementation
-    const auto time_provider_impl = _configuration.get(name::TIME_PROVIDER_IMPLEMENTATION, value::NULL_TIME_PROVIDER);
-    i_time_provider* interaction_time_provider;
-    RETURN_IF_FAIL(_time_provider_factory->create(&interaction_time_provider, time_provider_impl, _configuration, _trace_logger.get(), status));
+    const auto* const time_provider_impl = _configuration.get(name::TIME_PROVIDER_IMPLEMENTATION, value::get_default_time_provider());
+    i_time_provider* ranking_time_provider;
+    RETURN_IF_FAIL(_time_provider_factory->create(&ranking_time_provider, time_provider_impl, _configuration, _trace_logger.get(), status));
 
     // Create a logger for interactions that will use msg sender to send interaction messages
-    _ranking_logger.reset(new logger::interaction_logger(_configuration, ranking_msg_sender, _watchdog, interaction_time_provider, &_error_cb));
-    RETURN_IF_FAIL(_ranking_logger->init(status));
+    _interaction_logger.reset(new logger::interaction_logger_facade(_model->model_type(), _configuration, ranking_msg_sender, _watchdog, ranking_time_provider, &_error_cb));
+    RETURN_IF_FAIL(_interaction_logger->init(status));
 
     // Get the name of raw data (as opposed to message) sender for observations.
-    const auto outcome_sender_impl = _configuration.get(name::OBSERVATION_SENDER_IMPLEMENTATION, value::OBSERVATION_EH_SENDER);
+    const auto* const outcome_sender_impl = _configuration.get(name::OBSERVATION_SENDER_IMPLEMENTATION, value::get_default_observation_sender());
     i_sender* outcome_sender;
 
     // Use the name to create an instance of raw data sender for observations
     RETURN_IF_FAIL(_sender_factory->create(&outcome_sender, outcome_sender_impl, _configuration, &_error_cb, _trace_logger.get(), status));
     RETURN_IF_FAIL(outcome_sender->init(status));
 
-    // Create a message sender that will prepend the message with a preamble and send the raw data using the 
+    // Create a message sender that will prepend the message with a preamble and send the raw data using the
     // factory created raw data sender
     l::i_message_sender* outcome_msg_sender = new l::preamble_message_sender(outcome_sender);
     RETURN_IF_FAIL(outcome_msg_sender->init(status));
@@ -209,7 +400,7 @@ namespace reinforcement_learning {
     RETURN_IF_FAIL(_time_provider_factory->create(&observation_time_provider, time_provider_impl, _configuration, _trace_logger.get(), status));
 
     // Create a logger for interactions that will use msg sender to send interaction messages
-    _outcome_logger.reset(new logger::observation_logger(_configuration, outcome_msg_sender, _watchdog, observation_time_provider,&_error_cb));
+    _outcome_logger.reset(new logger::observation_logger_facade(_configuration, outcome_msg_sender, _watchdog, observation_time_provider, &_error_cb));
     RETURN_IF_FAIL(_outcome_logger->init(status));
 
     return error_code::success;
@@ -240,8 +431,13 @@ namespace reinforcement_learning {
     api_status* status) const {
 
     // Generate egreedy pdf
-    size_t action_count = 0;
-    RETURN_IF_FAIL(utility::get_action_count(action_count, context, _trace_logger.get(), status));
+    utility::ContextInfo context_info;
+    RETURN_IF_FAIL(utility::get_context_info(context, context_info, _trace_logger.get(), status));
+
+    size_t action_count = context_info.actions.size();
+    if(action_count < 1) {
+        RETURN_ERROR_LS(_trace_logger.get(), status, json_no_actions_found) << "Context must have at least one action";
+    }
 
     vector<float> pdf(action_count);
     // Generate a pdf with epsilon distributed between all action.
@@ -283,7 +479,7 @@ namespace reinforcement_learning {
     // Swap values in first position with values in chosen index
     scode = e::swap_chosen(begin(response), end(response), chosen_index);
 
-    if ( S_EXPLORATION_OK != scode ) {
+    if (S_EXPLORATION_OK != scode) {
       RETURN_ERROR_LS(_trace_logger.get(), status, exploration_error) << "Exploration (Swap) error code: " << scode;
     }
 
@@ -308,38 +504,53 @@ namespace reinforcement_learning {
 
   int live_model_impl::init_model_mgmt(api_status* status) {
     // Initialize transport for the model using transport factory
-    const auto tranport_impl = _configuration.get(name::MODEL_SRC, value::AZURE_STORAGE_BLOB);
+    const auto tranport_impl = _configuration.get(name::MODEL_SRC, value::get_default_data_transport());
     m::i_data_transport* ptransport;
     RETURN_IF_FAIL(_t_factory->create(&ptransport, tranport_impl, _configuration, status));
     // This class manages lifetime of transport
     this->_transport.reset(ptransport);
 
-	  if (_bg_model_proc) {
+    if (_bg_model_proc) {
       // Initialize background process and start downloading models
-	    this->_model_download.reset(new m::model_downloader(ptransport, &_data_cb, _trace_logger.get()));
-	    return _bg_model_proc->init(_model_download.get(), status);
-	  }
+      this->_model_download.reset(new m::model_downloader(ptransport, &_data_cb, _trace_logger.get()));
+      return _bg_model_proc->init(_model_download.get(), status);
+    }
 
     return refresh_model(status);
   }
 
   //helper: check if at least one of the arguments is null or empty
-  int check_null_or_empty(const char* arg1, const char* arg2, api_status* status) {
+  int check_null_or_empty(const char* arg1, const char* arg2, i_trace* trace, api_status* status) {
     if (!arg1 || !arg2 || strlen(arg1) == 0 || strlen(arg2) == 0) {
-      api_status::try_update(status, error_code::invalid_argument,
-        "one of the arguments passed to the ds is null or empty");
-      return error_code::invalid_argument;
+      RETURN_ERROR_ARG(trace, status, invalid_argument, "one of the arguments passed to the ds is null or empty");
     }
     return error_code::success;
   }
 
-  int check_null_or_empty(const char* arg1, api_status* status) {
+  int check_null_or_empty(const char* arg1,  i_trace* trace, api_status* status) {
     if (!arg1 || strlen(arg1) == 0) {
-      api_status::try_update(status, error_code::invalid_argument,
-        "one of the arguments passed to the ds is null or empty");
-      return error_code::invalid_argument;
+      RETURN_ERROR_ARG(trace, status, invalid_argument, "one of the arguments passed to the ds is null or empty");
     }
     return error_code::success;
   }
 
+  int reset_action_order(ranking_response& response) {
+#ifdef __clang__
+    std::vector<action_prob> tmp;
+    std::copy(response.begin(), response.end(), std::back_inserter(tmp));
+    std::sort(tmp.begin(), tmp.end(), [](const action_prob& a, const action_prob& b) {
+      return a.action_id < b.action_id;
+    }
+    );
+    std::copy(tmp.begin(), tmp.end(), response.begin());
+#else
+    std::sort(response.begin(), response.end(), [](const action_prob& a, const action_prob& b) {
+      return a.action_id < b.action_id;
+    }
+    );
+#endif
+    response.set_chosen_action_id((*(response.begin())).action_id);
+
+    return error_code::success;
+  }
 }

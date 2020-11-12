@@ -7,6 +7,7 @@
 #include "logger/message_type.h"
 #include "api_status.h"
 #include "utility/data_buffer_streambuf.h"
+#include "utility/config_helper.h"
 
 namespace reinforcement_learning { namespace logger {
 
@@ -45,7 +46,7 @@ namespace reinforcement_learning { namespace logger {
 
       //add model id
       buffer << R"(],"VWState":{"m":")" << evt.get_model_id() << R"("})";
-           
+
       if (evt.get_pass_prob() < 1) {
         buffer << R"(,"pdrop":)" << (1 - evt.get_pass_prob());
       }
@@ -72,7 +73,7 @@ namespace reinforcement_learning { namespace logger {
           buffer << R"({"EventId":")" << evt.get_event_id() << R"(","ActionTaken":true})";
           break;
         default: {
-          return report_error(status, error_code::serialize_unknown_outcome_type, error_code::serialize_unknown_outcome_type_s);
+          RETURN_ERROR(nullptr, status, serialize_unknown_outcome_type);
         }
       }
       return error_code::success;
@@ -84,15 +85,18 @@ namespace reinforcement_learning { namespace logger {
     using serializer_t = json_event_serializer<event_t>;
     using buffer_t = utility::data_buffer;
     using streambuf_t = utility::data_buffer_streambuf;
+    using shared_state_t = int;
 
     static int message_id() { return 0; }
 
-    json_collection_serializer(buffer_t& buffer) :
-      _buffer(buffer),
+    json_collection_serializer(buffer_t& buffer, content_encoding_enum content_encoding)
+      : _buffer(buffer),
       _streambuf{&_buffer},
       _ostream{&_streambuf} {
       _ostream << std::unitbuf;
     }
+
+    json_collection_serializer(buffer_t& buffer, content_encoding_enum content_encoding, int /*dummy*/) : json_collection_serializer(buffer, content_encoding) {}
 
     int add(event_t& evt, api_status* status=nullptr) {
       RETURN_IF_FAIL(serializer_t::serialize(evt, _ostream, status));
