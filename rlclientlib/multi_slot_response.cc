@@ -4,22 +4,30 @@
 
 namespace reinforcement_learning
 {
-  slot_entry::slot_entry(uint32_t _slot_id, uint32_t _action_id, float _probability)
-    : slot_id(_slot_id)
-    , action_id(_action_id)
-    , probability(_probability) {
+  slot_entry::slot_entry(const std::string& id, uint32_t action_id, float probability)
+    : _id(id)
+    , _action_id(action_id)
+    , _probability(probability) {
   }
 
-  uint32_t slot_entry::get_slot_id() const {
-    return slot_id;
+  const char* slot_entry::get_id() const {
+    return _id.c_str();
   }
 
   uint32_t slot_entry::get_action_id() const {
-    return action_id;
+    return _action_id;
+  }
+
+  void slot_entry::set_action_id(uint32_t action_id) {
+    _action_id = action_id;
+  }
+
+  void slot_entry::set_probability(float prob) {
+    _probability = prob;
   }
 
   float slot_entry::get_probability() const {
-    return probability;
+    return _probability;
   }
 
   void multi_slot_response::set_event_id(const char* event_id) {
@@ -52,8 +60,8 @@ namespace reinforcement_learning
     _event_id.clear();
   }
 
-  void multi_slot_response::push_back(uint32_t action_id, float prob) {
-    _decision.emplace_back(_decision.size(), action_id, prob);
+  void multi_slot_response::push_back(const std::string& id, uint32_t action_id, float prob) {
+    _decision.emplace_back(id, action_id, prob);
   }
 
   size_t multi_slot_response::size() const {
@@ -75,4 +83,4 @@ namespace reinforcement_learning
   multi_slot_response::iterator_t multi_slot_response::end() {
     return { _decision, _decision.size() };
   }
-} // namespace reinforcement_learning
+}

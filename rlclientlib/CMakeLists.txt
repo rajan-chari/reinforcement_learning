@@ -14,8 +14,11 @@ set(RL_FLAT_BUFFER_FILES_V2
   "${CMAKE_CURRENT_SOURCE_DIR}/schema/v2/OutcomeEvent.fbs"
   "${CMAKE_CURRENT_SOURCE_DIR}/schema/v2/CbEvent.fbs"
   "${CMAKE_CURRENT_SOURCE_DIR}/schema/v2/CaEvent.fbs"
+  "${CMAKE_CURRENT_SOURCE_DIR}/schema/v2/FileFormat.fbs"
   "${CMAKE_CURRENT_SOURCE_DIR}/schema/v2/MultiSlotEvent.fbs"
-  "${CMAKE_CURRENT_SOURCE_DIR}/schema/v2/Event.fbs" )
+  "${CMAKE_CURRENT_SOURCE_DIR}/schema/v2/Event.fbs"
+  "${CMAKE_CURRENT_SOURCE_DIR}/schema/v2/LearningModeType.fbs"
+  "${CMAKE_CURRENT_SOURCE_DIR}/schema/v2/MultiStepEvent.fbs")
 
 build_flatbuffers("${RL_FLAT_BUFFER_FILES_V1}" "" fbgenerator_v1 "" "${CMAKE_CURRENT_SOURCE_DIR}/generated/v1/" "" "")
 build_flatbuffers("${RL_FLAT_BUFFER_FILES_V2}" "" fbgenerator_v2 "" "${CMAKE_CURRENT_SOURCE_DIR}/generated/v2/" "" "")
@@ -36,6 +39,7 @@ set(PROJECT_SOURCES
   logger/event_logger.cc
   logger/flatbuffer_allocator.cc
   logger/logger_facade.cc
+  logger/logger_extensions.cc
   logger/preamble.cc
   logger/preamble_sender.cc
   logger/endian.cc
@@ -49,6 +53,8 @@ set(PROJECT_SOURCES
   ranking_event.cc
   ranking_response.cc
   sampling.cc
+  multi_slot_response_detailed.cc
+  slot_ranking.cc
   serialization/payload_serializer.cc
   multi_slot_response.cc
   trace_logger.cc
@@ -101,6 +107,8 @@ set(PROJECT_PUBLIC_HEADERS
   ../include/str_util.h
   ../include/trace_logger.h
   ../include/data_buffer.h
+  ../include/slot_ranking.h
+  ../include/multi_slot_response_detailed.h
 )
 
 set(PROJECT_PRIVATE_HEADERS
