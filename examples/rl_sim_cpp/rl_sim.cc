@@ -28,14 +28,39 @@ int rl_sim::loop() {
   }
 }
 
+string get_ecs_context(int cell_num)
+{
+  std::stringstream strm;
+  strm << "\"Features\":[{\"skypeidhash\":\"" << cell_num << "\"},{\"index\":\"" << cell_num << "\"},{\"rand\":\"0.4885425913647321\"},{\"callback\":\"jquery1102009834833616387084_1619807677140\"},{\"_\":\"1619807682645\"},{\"ecshost\":\"skypeecs-dev-cd-3.cloudapp.net\"},{\"country\":\"us\"}]";
+  return strm.str();
+}
+
+float get_ecs_outcome(int cell_id, int chosen_color)
+{
+  int good_action = 0;
+  if(cell_id >33 && cell_id <= 66){
+    good_action = 1;
+  }
+  else if(cell_id > 66){
+    good_action = 2;
+  }
+
+  if (good_action == chosen_color)
+    return 1.0f;
+  
+  return 0.0f;
+}
+
 int rl_sim::cb_loop() {
   r::ranking_response response;
   simulation_stats<size_t> stats;
 
+  string action_features = "\"_multi\":[{\"color\":\"blue\"},{\"color\":\"green\"},{\"color\":\"red\"}]";
+
+  int cell_id = 0;
   while ( _run_loop ) {
-    auto& p = pick_a_random_person();
-    const auto context_features = p.get_features();
-    const auto action_features = get_action_features();
+    cell_id = cell_id % 100;
+    string context_features = get_ecs_context(cell_id++);
     const auto context_json = create_context_json(context_features,action_features);
     const auto req_id = create_event_id();
     r::api_status status;
@@ -54,7 +79,7 @@ int rl_sim::cb_loop() {
     }
 
     // What outcome did this action get?
-    const auto outcome = p.get_outcome(_topics[chosen_action]);
+    const auto outcome = get_ecs_outcome(cell_id, chosen_action);
 
     // Report outcome received
     if ( _rl->report_outcome(req_id.c_str(), outcome, &status) != err::success && outcome > 0.00001f ) {
@@ -62,10 +87,10 @@ int rl_sim::cb_loop() {
       continue;
     }
 
-    stats.record(p.id(), chosen_action, outcome);
+    stats.record("foo", chosen_action, outcome);
 
-    std::cout << " " << stats.count() << ", ctxt, " << p.id() << ", action, " << chosen_action << ", outcome, " << outcome
-      << ", dist, " << get_dist_str(response) << ", " << stats.get_stats(p.id(), chosen_action) << std::endl;
+    std::cout << " " << stats.count() << ", ctxt, " << "foo" << ", action, " << chosen_action << ", outcome, " << outcome
+      << ", dist, " << get_dist_str(response) << ", " << stats.get_stats("foo", chosen_action) << std::endl;
 
     std::this_thread::sleep_for(std::chrono::milliseconds(2000));
   }
